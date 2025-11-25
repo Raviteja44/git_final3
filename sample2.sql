@@ -9,4 +9,5 @@ CREATE TABLE test_users (
 INSERT INTO test_users VALUES (1, 'John Doe', 'john@example.com');
 
 
----test1 
+---test1 passed
+---test 2 in progess
