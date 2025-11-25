@@ -1,70 +1,71 @@
-name: 4. Cleanup Temp Promotion Branches
+name: Cleanup Temp Branches
 
 on:
   pull_request:
-    types: [closed]   # Only triggers when PR is fully closed (merged or not)
+    types: [closed]
 
 permissions:
   contents: write
+  pull-requests: read
 
 jobs:
-  cleanup-temp-branches:
+  cleanup:
     runs-on: ubuntu-latest
-
-    # Only run if PR is actually merged (not just closed)
+    # Only run when PR is merged (not just closed)
     if: github.event.pull_request.merged == true
-
+    
     steps:
-      - name: Extract source branch name (PR head_ref)
+      - name: Extract branch info
         id: extract
-        run: echo "branch_name=${GITHUB_HEAD_REF}" >> $GITHUB_OUTPUT
-
-      - name: Validate if branch is a promotion temp branch
-        id: validate
         run: |
-          BRANCH="${{ steps.extract.outputs.branch_name }}"
+          BRANCH_NAME="${{ github.event.pull_request.head.ref }}"
+          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
           
-          # Branches to never delete
-          PROTECT_REGEX="^(main|dev|uat|prod|feature/.*)$"
-
-          if [[ "$BRANCH" =~ $PROTECT_REGEX ]]; then
-            echo "is_temp=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Delete only branches starting with promote/
-          if [[ "$BRANCH" =~ ^promote/ ]]; then
-            echo "is_temp=true" >> $GITHUB_OUTPUT
+          # Check if it's a temp promotion branch and NOT a protected branch
+          if [[ "$BRANCH_NAME" =~ ^promote/ ]] && \
+             [[ "$BRANCH_NAME" != "main" ]] && \
+             [[ "$BRANCH_NAME" != "dev" ]] && \
+             [[ "$BRANCH_NAME" != "uat" ]] && \
+             [[ ! "$BRANCH_NAME" =~ ^feature/ ]]; then
+            echo "should_delete=true" >> $GITHUB_OUTPUT
           else
-            echo "is_temp=false" >> $GITHUB_OUTPUT
+            echo "should_delete=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Stop if not a promotion temp branch
-        if: steps.validate.outputs.is_temp == 'false'
+      - name: Skip if not a temp branch
+        if: steps.extract.outputs.should_delete == 'false'
         run: |
-          echo "Branch '${{ steps.extract.outputs.branch_name }}' is not a temp promotion branch. Skipping deletion."
-          exit 0
+          echo "✅ Skipping deletion - '${{ steps.extract.outputs.branch_name }}' is not a temporary promotion branch or is protected"
+          echo "Protected branches: main, dev, uat, feature/* are preserved"
 
-      - name: Delete temp branch using GitHub API
-        if: steps.validate.outputs.is_temp == 'true'
+      - name: Delete temp branch via GitHub API
+        if: steps.extract.outputs.should_delete == 'true'
         run: |
           BRANCH="${{ steps.extract.outputs.branch_name }}"
           OWNER="${{ github.repository_owner }}"
           REPO="${{ github.event.repository.name }}"
-
-          echo "Deleting temporary promotion branch: $BRANCH"
-
-          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+          
+          echo "🗑️ Deleting temporary branch: $BRANCH"
+          
+          # Use GitHub API to delete the branch
+          response=$(curl -s -w "%{http_code}" -X DELETE \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}")
-
-          if [[ "$RESPONSE" == "204" ]]; then
-            echo "Branch deleted successfully."
+          
+          http_code="${response: -3}"
+          
+          if [ "$http_code" -eq 422 ]; then
+            echo "⚠️ Branch '$BRANCH' was already deleted or doesn't exist"
+          elif [ "$http_code" -eq 204 ]; then
+            echo "✅ Successfully deleted branch: $BRANCH"
           else
-            echo "WARNING: Branch deletion returned HTTP $RESPONSE"
+            echo "❌ Failed to delete branch: $BRANCH (HTTP $http_code)"
+            # Don't fail the workflow for deletion errors
           fi
 
-      - name: Completion Message
+      - name: Completion summary
         run: |
-          echo "Cleanup workflow completed for branch: '${{ steps.extract.outputs.branch_name }}'"
+          echo "🏁 Cleanup process completed for PR #${{ github.event.pull_request.number }}"
+          echo "Branch: '${{ steps.extract.outputs.branch_name }}'"
+          echo "Action: ${{ steps.extract.outputs.should_delete == 'true' && 'DELETED' || 'SKIPPED' }}"
