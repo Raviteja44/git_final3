@@ -2,7 +2,7 @@ name: 4. Cleanup Temp Branches
 
 on:
   pull_request:
-    types: [closed]  # triggers when PR is merged or just closed
+    types: [closed]  # triggers when a PR is merged or just closed
 
 permissions:
   contents: write
@@ -10,21 +10,15 @@ permissions:
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-
     if: github.event.pull_request.merged == true
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Extract branch name
         id: extract
         run: |
           echo "branch_name=${GITHUB_HEAD_REF}" >> $GITHUB_OUTPUT
 
-      - name: Validate branch is a temp promotion branch
+      - name: Validate if branch is a temp promotion branch
         id: validate
         run: |
           BRANCH="${{ steps.extract.outputs.branch_name }}"
@@ -38,22 +32,26 @@ jobs:
       - name: Stop if not a temp branch
         if: steps.validate.outputs.is_temp_branch == 'false'
         run: |
-          echo "Branch '${{ steps.extract.outputs.branch_name }}' is not a promotion temp branch. Skipping cleanup."
+          echo "Branch '${{ steps.extract.outputs.branch_name }}' is not a temp promotion branch. Skipping deletion."
           exit 0
 
-      - name: Delete remote temp branch
+      - name: Delete temp branch using GitHub API
         if: steps.validate.outputs.is_temp_branch == 'true'
         run: |
           BRANCH="${{ steps.extract.outputs.branch_name }}"
+          OWNER="${{ github.repository_owner }}"
+          REPO="${{ github.event.repository.name }}"
 
-          echo "Deleting temporary branch: $BRANCH"
+          echo "Deleting temp branch via GitHub API: $BRANCH"
 
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
+          # Delete branch ref using GitHub API
+          curl -s -X DELETE \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${OWNER}/${REPO}/git/refs/heads/${BRANCH}"
 
-          git fetch --all
-          git push origin --delete "$BRANCH" || echo "Branch deletion encountered a non-critical error"
+          echo "Branch delete request sent."
 
       - name: Completion message
         run: |
-          echo "Cleanup completed for temp branch: '${{ steps.extract.outputs.branch_name }}'"
+          echo "Cleanup complete for: '${{ steps.extract.outputs.branch_name }}'"
